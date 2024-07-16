@@ -78,6 +78,8 @@ struct _GstNanomsgSrc
 	/* TRUE if the source is currently in flushing mode */
 	gboolean flushing;
 
+	GstCaps   *caps;
+
 	GMutex mutex;
 };
 

@@ -73,7 +73,8 @@ enum
 	PROP_RCVBUFSIZE,
 	PROP_RCVMAXSIZE,
 	PROP_SUBSCRIPTION_TOPIC,
-	PROP_IS_LIVE
+	PROP_IS_LIVE,
+	PROP_CAPS,
 };
 
 
@@ -110,6 +111,7 @@ G_DEFINE_TYPE_WITH_CODE(
 static void gst_nanomsgsrc_finalize(GObject *object);
 static void gst_nanomsgsrc_set_property(GObject *object, guint prop_id, GValue const *value, GParamSpec *pspec);
 static void gst_nanomsgsrc_get_property(GObject *object, guint prop_id, GValue *value, GParamSpec *pspec);
+static GstCaps *gst_nanomsgsrc_getcaps (GstBaseSrc * src, GstCaps * filter);
 
 static GstStateChangeReturn gst_nanomsgsrc_change_state(GstElement *element, GstStateChange transition);
 
@@ -178,6 +180,7 @@ static void gst_nanomsgsrc_class_init(GstNanomsgSrcClass *klass)
 	element_class->change_state = GST_DEBUG_FUNCPTR(gst_nanomsgsrc_change_state);
 	basesrc_class->unlock       = GST_DEBUG_FUNCPTR(gst_nanomsgsrc_unlock);
 	basesrc_class->unlock_stop  = GST_DEBUG_FUNCPTR(gst_nanomsgsrc_unlock_stop);
+	basesrc_class->get_caps     = GST_DEBUG_FUNCPTR(gst_nanomsgsrc_getcaps);
 	pushsrc_class->create       = GST_DEBUG_FUNCPTR(gst_nanomsgsrc_create);
 
 	g_object_class_install_property(
@@ -272,6 +275,14 @@ static void gst_nanomsgsrc_class_init(GstNanomsgSrcClass *klass)
 			G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS
 		)
 	);
+	g_object_class_install_property(
+                object_class,
+		PROP_CAPS,
+		g_param_spec_boxed ("caps", "Caps",
+				    "The caps of the source pad", GST_TYPE_CAPS,
+				    G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS
+	        )
+	);
 
 	gst_element_class_set_static_metadata(
 		element_class,
@@ -297,6 +308,8 @@ static void gst_nanomsgsrc_init(GstNanomsgSrc *nanomsgsrc)
 	nanomsgsrc->ctrl_fds[0] = -1;
 	nanomsgsrc->ctrl_fds[1] = -1;
 
+	nanomsgsrc->caps = NULL;
+
 	nanomsgsrc->flushing = FALSE;
 	g_mutex_init(&(nanomsgsrc->mutex));
 
@@ -313,6 +326,10 @@ static void gst_nanomsgsrc_finalize(GObject *object)
 		g_free(nanomsgsrc->uri);
 	if (nanomsgsrc->subscription_topic != DEFAULT_SUBSCRIPTION_TOPIC)
 		g_free(nanomsgsrc->subscription_topic);
+	if (nanomsgsrc->caps)
+		gst_caps_unref (nanomsgsrc->caps);
+	nanomsgsrc->caps = NULL;
+
 	g_mutex_clear(&(nanomsgsrc->mutex));
 
 	G_OBJECT_CLASS(gst_nanomsgsrc_parent_class)->finalize(object);
@@ -421,6 +438,28 @@ static void gst_nanomsgsrc_set_property(GObject *object, guint prop_id, GValue c
 			gst_base_src_set_live(GST_BASE_SRC(object), g_value_get_boolean(value));
 			break;
 
+    	        case PROP_CAPS:
+			{
+				const GstCaps *new_caps_val = gst_value_get_caps (value);
+				GstCaps *new_caps;
+				GstCaps *old_caps;
+
+				if (new_caps_val == NULL) {
+					new_caps = gst_caps_new_any ();
+				} else {
+					new_caps = gst_caps_copy (new_caps_val);
+				}
+
+				GST_OBJECT_LOCK (nanomsgsrc);
+				old_caps = nanomsgsrc->caps;
+				nanomsgsrc->caps = new_caps;
+				GST_OBJECT_UNLOCK (nanomsgsrc);
+				if (old_caps)
+					gst_caps_unref (old_caps);
+
+				gst_pad_mark_reconfigure (GST_BASE_SRC_PAD (nanomsgsrc));
+				break;
+			}
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
 			break;
@@ -477,6 +516,12 @@ static void gst_nanomsgsrc_get_property(GObject *object, guint prop_id, GValue *
 
 		case PROP_IS_LIVE:
 			g_value_set_boolean(value, gst_base_src_is_live(GST_BASE_SRC(object)));
+			break;
+
+        	case PROP_CAPS:
+			GST_OBJECT_LOCK (nanomsgsrc);
+			gst_value_set_caps (value, nanomsgsrc->caps);
+			GST_OBJECT_UNLOCK (nanomsgsrc);
 			break;
 
 		default:
@@ -726,7 +771,7 @@ static gboolean gst_nanomsgsrc_init_sockets(GstNanomsgSrc *nanomsgsrc)
 		GST_ELEMENT_ERROR(nanomsgsrc, RESOURCE, NOT_FOUND, ("URI starts with the wrong prefix"), ("URI: %s , expected prefix: \"" PROTOCOL_PREFIX "\"", nanomsgsrc->uri));
 		return FALSE;
 	}
-	
+
 	/* Get the actual nanomsg URI, without the prefix */
 	actual_uri = PROTOCOLSTR_REMOVE_PREFIX(nanomsgsrc->uri);
 	GST_DEBUG_OBJECT(nanomsgsrc, "URI without the prefix: %s", actual_uri);
@@ -928,4 +973,31 @@ static gboolean gst_nanomsgsrc_update_rcvmaxsize(GstNanomsgSrc *nanomsgsrc, int 
 	}
 	else
 		return TRUE;
+}
+
+
+static GstCaps *
+gst_nanomsgsrc_getcaps (GstBaseSrc * src, GstCaps * filter)
+{
+  GstNanomsgSrc *nanomsgsrc;
+  GstCaps *caps, *result;
+
+  nanomsgsrc = GST_NANOMSGSRC (src);
+
+  GST_OBJECT_LOCK (src);
+  if ((caps = nanomsgsrc->caps))
+    gst_caps_ref (caps);
+  GST_OBJECT_UNLOCK (src);
+
+  if (caps) {
+    if (filter) {
+      result = gst_caps_intersect_full (filter, caps, GST_CAPS_INTERSECT_FIRST);
+      gst_caps_unref (caps);
+    } else {
+      result = caps;
+    }
+  } else {
+    result = (filter) ? gst_caps_ref (filter) : gst_caps_new_any ();
+  }
+  return result;
 }
