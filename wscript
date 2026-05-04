@@ -47,10 +47,10 @@ def add_compiler_flags(conf, env, flags, lang, compiler, uselib = ''):
 
 
 def options(opt):
-	opt.add_option('--enable-debug', action = 'store_true', default = False, help = 'enable debug build [default: %default]')
-	opt.add_option('--with-package-name', action = 'store', default = "Unknown package release", help = 'specify package name to use in plugin [default: %default]')
-	opt.add_option('--with-package-origin', action = 'store', default = "Unknown package origin", help = 'specify package origin URL to use in plugin [default: %default]')
-	opt.add_option('--plugin-install-path', action = 'store', default = "${PREFIX}/lib/gstreamer-1.0", help = 'where to install the plugin for GStreamer 1.0 [default: %default]')
+	opt.add_option('--enable-debug', action = 'store_true', default = False, help = 'enable debug build [default: %(default)s]')
+	opt.add_option('--with-package-name', action = 'store', default = "Unknown package release", help = 'specify package name to use in plugin [default: %(default)s]')
+	opt.add_option('--with-package-origin', action = 'store', default = "Unknown package origin", help = 'specify package origin URL to use in plugin [default: %(default)s]')
+	opt.add_option('--plugin-install-path', action = 'store', default = "${PREFIX}/lib/gstreamer-1.0", help = 'where to install the plugin for GStreamer 1.0 [default: %(default)s]')
 	opt.load('compiler_c')
 	opt.load('gnu_dirs')
 
